@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Stock Analyzer (USA Market Only)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #374151;
+            padding: 1rem;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 1.5rem;
+            background-color: #ffffff;
+            border-radius: 1.5rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        #loading-indicator {
+            border-top-color: #3b82f6;
+            -webkit-animation: spinner 1.5s linear infinite;
+            animation: spinner 1.5s linear infinite;
+        }
+        @-webkit-keyframes spinner {
+            0% { -webkit-transform: rotate(0deg); }
+            100% { -webkit-transform: rotate(360deg); }
+        }
+        @keyframes spinner {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .analysis-box {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 1.5rem;
+            border-radius: 1rem;
+            margin-top: 2rem;
+        }
+        .buy-card {
+            background-color: #d1fae5;
+        }
+        .sell-card {
+            background-color: #fee2e2;
+        }
+        .hold-card {
+            background-color: #fef3c7;
+        }
+        .recommendation {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+        #suggestions-box {
+            position: absolute;
+            width: calc(100% - 3rem);
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.75rem;
+            margin-top: 0.5rem;
+            z-index: 10;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        #suggestions-box div {
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            transition: background-color 0.1s;
+        }
+        #suggestions-box div:hover {
+            background-color: #f3f4f6;
+        }
+        .toast {
+            position: absolute;
+            top: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            z-index: 20;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .toast.show {
+            opacity: 1;
+        }
+        .toast.success {
+            background-color: #d1fae5;
+            color: #065f46;
+        }
+        .toast.error {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div class="container relative">
+        <h1 class="text-4xl font-bold text-center mb-6 text-gray-800">AI Stock Analyzer</h1>
+        <p class="text-center text-gray-500 mb-8">Analyze stocks listed on the U.S. markets.</p>
+        
+        <div class="space-y-6">
+            
+            <!-- Ticker Input -->
+            <div>
+                <label for="ticker" class="block text-lg font-medium text-gray-700 mb-2">Enter Stock Ticker</label>
+                <input type="text" id="ticker" class="w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., AAPL, GOOGL, AMZN">
+                <div id="suggestions-box" class="hidden"></div>
+            </div>
+
+            <!-- Analyze Button -->
+            <button id="analyze-btn" class="w-full py-4 px-6 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700 transition-colors duration-200">
+                Analyze Stock
+            </button>
+            
+            <!-- Loading Indicator -->
+            <div id="loading-indicator" class="hidden w-12 h-12 border-4 rounded-full border-solid border-gray-200 animate-spin mx-auto mt-8"></div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="analysis-box hidden">
+            <div id="stock-info" class="mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-2"></h2>
+                <p class="text-gray-500"></p>
+                <ul class="mt-4 space-y-2 text-gray-700"></ul>
+            </div>
+            <div id="ai-analysis" class="mt-8 p-6 rounded-xl shadow-md">
+                <h3 class="text-xl font-bold mb-3">AI Recommendation</h3>
+                <p id="recommendation-text" class="recommendation mb-2"></p>
+                <p id="analysis-text" class="text-gray-600"></p>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script>
+        // Note: For this POC, we'll use a reliable keyless API for US stock data.
+        const FMP_KEYLESS_API_URL = 'https://api.stockdata.org/v1/data/symbols';
+        const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=';
+
+        const tickerInput = document.getElementById('ticker');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const resultsDiv = document.getElementById('results');
+        const stockInfoDiv = document.getElementById('stock-info');
+        const aiAnalysisDiv = document.getElementById('ai-analysis');
+        const suggestionsBox = document.getElementById('suggestions-box');
+
+        // Add event listener for the 'Enter' key on the ticker input field
+        tickerInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault(); // Prevents the default action of the Enter key
+                analyzeBtn.click();
+            }
+        });
+
+        const debounce = (func, delay) => {
+            let timeoutId;
+            return (...args) => {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        };
+
+        // Event listener for auto-suggestions using a keyless API endpoint for US stocks
+        tickerInput.addEventListener('input', debounce(async (e) => {
+            const query = e.target.value.trim();
+            if (query.length < 2) {
+                suggestionsBox.classList.add('hidden');
+                return;
+            }
+
+            try {
+                // Keyless API for search - using a placeholder for now as a reliable one is hard to find
+                // This is a common limitation of free APIs. We will simulate suggestions for a POC.
+                const simulatedSuggestions = ['AAPL', 'GOOGL', 'AMZN', 'MSFT', 'TSLA', 'META'];
+                const matches = simulatedSuggestions.filter(s => s.startsWith(query.toUpperCase()));
+                displaySuggestions(matches);
+                
+            } catch (error) {
+                console.error("Error fetching suggestions:", error);
+                suggestionsBox.classList.add('hidden');
+            }
+        }, 300)); // 300ms debounce delay
+
+        document.addEventListener('click', (e) => {
+            if (!tickerInput.contains(e.target) && !suggestionsBox.contains(e.target)) {
+                suggestionsBox.classList.add('hidden');
+            }
+        });
+
+        function displaySuggestions(matches) {
+            suggestionsBox.innerHTML = '';
+            if (matches.length > 0) {
+                suggestionsBox.classList.remove('hidden');
+                matches.forEach(match => {
+                    const suggestion = document.createElement('div');
+                    suggestion.innerHTML = `<strong>${match}</strong>`;
+                    suggestion.addEventListener('click', () => {
+                        tickerInput.value = match;
+                        suggestionsBox.classList.add('hidden');
+                    });
+                    suggestionsBox.appendChild(suggestion);
+                });
+            } else {
+                suggestionsBox.classList.remove('hidden');
+                const noMatches = document.createElement('div');
+                noMatches.textContent = 'No suggestions found.';
+                noMatches.classList.add('text-gray-500', 'text-sm', 'italic', 'p-4');
+                suggestionsBox.appendChild(noMatches);
+            }
+        }
+
+        analyzeBtn.addEventListener('click', async () => {
+            const ticker = tickerInput.value.trim().toUpperCase();
+            if (!ticker) {
+                alert('Please enter a stock ticker.');
+                return;
+            }
+
+            loadingIndicator.classList.remove('hidden');
+            resultsDiv.classList.add('hidden');
+            analyzeBtn.disabled = true;
+
+            try {
+                const stockData = await fetchStockData(ticker);
+                const aiResponse = await getAIAnalysis(stockData);
+                displayResults(stockData, aiResponse);
+            } catch (error) {
+                console.error("Error during analysis:", error);
+                alert(`Error: ${error.message}`);
+            } finally {
+                loadingIndicator.classList.add('hidden');
+                analyzeBtn.disabled = false;
+            }
+        });
+
+        async function fetchStockData(ticker) {
+             const mockData = {
+                'AAPL': { companyName: 'Apple Inc.', market: 'USA', sector: 'Technology', peRatio: '28.1', marketCap: '2500000000000', dividendYield: '0.005', revenue: '383000000000' },
+                'GOOGL': { companyName: 'Alphabet Inc.', market: 'USA', sector: 'Technology', peRatio: '23.5', marketCap: '2000000000000', dividendYield: '0', revenue: '307000000000' },
+                'AMZN': { companyName: 'Amazon.com, Inc.', market: 'USA', sector: 'Consumer Cyclical', peRatio: '50.2', marketCap: '1900000000000', dividendYield: '0', revenue: '575000000000' },
+                'MSFT': { companyName: 'Microsoft Corporation', market: 'USA', sector: 'Technology', peRatio: '32.1', marketCap: '3100000000000', dividendYield: '0.008', revenue: '236000000000' },
+                'TSLA': { companyName: 'Tesla, Inc.', market: 'USA', sector: 'Consumer Cyclical', peRatio: '75.3', marketCap: '850000000000', dividendYield: '0', revenue: '96700000000' },
+                'META': { companyName: 'Meta Platforms, Inc.', market: 'USA', sector: 'Communication Services', peRatio: '25.4', marketCap: '1200000000000', dividendYield: '0', revenue: '134000000000' }
+            };
+
+            const data = mockData[ticker];
+            if (!data) {
+                throw new Error(`Ticker '${ticker}' not found in mock data. Please use a valid ticker.`);
+            }
+            return new Promise(resolve => setTimeout(() => resolve(data), 500));
+        }
+        
+        async function getAIAnalysis(data) {
+            const payload = {
+                contents: [{
+                    parts: [{
+                        text: `
+                        Act as a professional financial analyst. Based on the following stock data, provide a very concise analysis and a clear recommendation of either BUY, SELL, or HOLD.
+                        
+                        Stock: ${data.companyName} (${data.ticker})
+                        Market: ${data.market}
+                        
+                        Key Data:
+                        - P/E Ratio: ${data.peRatio}
+                        - Market Cap: ${data.marketCap}
+                        - Dividend Yield: ${data.dividendYield}
+                        - Latest Annual Revenue: ${data.revenue}
+                        
+                        Analysis:
+                        - Current market sentiment: Mixed (based on conceptual data).
+                        - Financial Health: The company has an annual revenue of $${data.revenue}. Its P/E ratio is ${data.peRatio}.
+                        
+                        Provide a single paragraph analysis and then state your recommendation clearly.
+                        `
+                    }]
+                }]
+            };
+
+            const apiKey = ""; // Canvas will automatically provide the key
+            const url = `${GEMINI_API_URL}${apiKey}`;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const aiText = result.candidates[0].content.parts[0].text;
+                return aiText;
+            } catch (error) {
+                console.error("Gemini API error:", error);
+                throw new Error("Failed to get AI analysis.");
+            }
+        }
+        
+        function displayResults(stockData, aiResponse) {
+            resultsDiv.classList.remove('hidden');
+            
+            const analysisText = aiResponse.split("Recommendation:")[0].trim();
+            const recommendation = aiResponse.split("Recommendation:")[1].trim().toUpperCase().split(".")[0];
+
+            stockInfoDiv.querySelector('h2').textContent = stockData.companyName;
+            stockInfoDiv.querySelector('p').textContent = `Ticker: ${stockData.ticker} | Market: ${stockData.market}`;
+            stockInfoDiv.querySelector('ul').innerHTML = `
+                <li><strong>Sector:</strong> ${stockData.sector}</li>
+                <li><strong>P/E Ratio:</strong> ${stockData.peRatio}</li>
+                <li><strong>Market Cap:</strong> ${formatMarketCap(stockData.marketCap)}</li>
+                <li><strong>Dividend Yield:</strong> ${(stockData.dividendYield * 100).toFixed(2) || 'N/A'}%</li>
+                <li><strong>Latest Annual Revenue:</strong> $${formatLargeNumber(stockData.revenue)}</li>
+            `;
+            
+            aiAnalysisDiv.querySelector('#recommendation-text').textContent = `Recommendation: ${recommendation}`;
+            aiAnalysisDiv.querySelector('#analysis-text').textContent = analysisText;
+            
+            aiAnalysisDiv.classList.remove('buy-card', 'sell-card', 'hold-card');
+            if (recommendation.includes("BUY")) {
+                aiAnalysisDiv.classList.add('buy-card');
+            } else if (recommendation.includes("SELL")) {
+                aiAnalysisDiv.classList.add('sell-card');
+            } else {
+                aiAnalysisDiv.classList.add('hold-card');
+            }
+        }
+        
+        function formatMarketCap(cap) {
+            if (cap === 'N/A' || isNaN(cap)) return 'N/A';
+            cap = Number(cap);
+            if (cap >= 1e12) {
+                return (cap / 1e12).toFixed(2) + 'T';
+            } else if (cap >= 1e9) {
+                return (cap / 1e9).toFixed(2) + 'B';
+            } else if (cap >= 1e6) {
+                return (cap / 1e6).toFixed(2) + 'M';
+            }
+            return cap;
+        }
+        
+        function formatLargeNumber(num) {
+            if (num === 'N/A' || isNaN(num)) return 'N/A';
+            num = Number(num);
+            return num.toLocaleString('en-US');
+        }
+
+    </script>
+</body>
+</html>
